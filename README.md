@@ -13,6 +13,9 @@ ColorOS 的人脸传感器向 `system_server` 上报 `4095`。因此当普通应
 - 在 `system_server` 中hook `PreAuthInfo` 的资格预检流程，将普通应用请求的 `4095` 人脸强度修改为标准 Class 3 强度（15）。
 - 仅影响普通 App 的预检调用链，`SystemUI`、系统锁屏等路径仍保持 ColorOS 原生实现不变。
 - 排除 `com.coloros.codebook` 等系统应用，(尽量)避免影响系统自带的认证判定。
+- 修复 ColorOS / 一加在应用人脸认证成功后，指纹图标与“继续”按钮重叠的问题。仅处理当前 `BiometricPrompt` 中与可用确认按钮相交的 `biometric_icon` / `biometric_icon_overlay`，使用 `INVISIBLE` 保留布局占位；按钮隐藏、布局不再重叠或弹窗关闭后恢复图标。
+
+该界面修复参考 [Zhanfg/FaceBiometricFix 2.2.4](https://github.com/Zhanfg/FaceBiometricFix/pull/1) 已确认的问题和资源 ID，重新实现为单个认证成功 Hook 和弹窗内的绘制前监听器。资源 ID 与视图引用只在安装监听器时解析，不依赖延时轮询、按钮文字或图标尺寸猜测。热重载前同步移除监听器，认证和确认流程继续由系统处理。
 
 ## 工作原理
 
@@ -41,11 +44,19 @@ ColorOS 的人脸传感器向 `system_server` 上报 `4095`。因此当普通应
 
 生成的 APK 位于 `app/build/outputs/apk/release/`。
 
+开发验证（不需要发布签名）：
+
+```bash
+./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+```
+
+Robolectric 回归测试覆盖图标重叠、保留布局、确认按钮不可用、系统重新显示图标，以及弹窗关闭和主动清理。仍需在对应 ColorOS / 一加实机上确认厂商界面兼容性。
+
 ## 安装与使用
 
 1. 安装编译出的 APK（可能需关闭系统签名校验或使用支持的方式安装模块 APK）。
-2. 在 LSPosed 中启用本模块（固定作用域已声明为系统框架 `system`）。
-3. 首次启用请重启系统；后续覆盖更新模块支持 `system_server` 热重载（`autoHotReload=true`），无需再次重启。
+2. 在 LSPosed 中启用本模块（固定作用域包含系统框架 `system` 和 `com.android.systemui`；已有安装更新后也需确认 SystemUI 已勾选）。
+3. 首次启用或新增 SystemUI 作用域后请重启系统；后续覆盖更新模块支持热重载（`autoHotReload=true`）。
 4. 在任意使用 `BiometricPrompt` 的应用中即可看到面容解锁选项。
 
 ## 说明与免责声明
