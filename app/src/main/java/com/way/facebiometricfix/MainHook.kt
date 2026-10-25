@@ -1,11 +1,21 @@
 package com.way.facebiometricfix
 
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.view.View
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
 
 class MainHook : XposedModule() {
+
+    private val promptGuards = mutableSetOf<PromptIconGuard>()
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+    @Volatile private var retiring = false
+    private var systemUiProcess = false
 
     private fun logInfo(msg: String) {
         log(Log.INFO, TAG, msg)
@@ -57,13 +67,40 @@ class MainHook : XposedModule() {
         installHooks(param.classLoader)
     }
 
+    override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
+        if (param.packageName == SYSTEM_UI_PACKAGE) {
+            systemUiProcess = true
+            hookSystemUi(param.classLoader)
+        }
+    }
+
     override fun onHotReloading(param: XposedModuleInterface.HotReloadingParam): Boolean {
         APP_PRE_AUTH_PACKAGE.remove()
-        logInfo("Hot reloading biometrics hooks in system_server ...")
+        retiring = true
+        if (!systemUiProcess) return true
+        // libxposed requires external callbacks to be removed before returning true.
+        val cleanup = FutureTask { promptGuards.toList().forEach { it.dispose() } }
+        if (Looper.myLooper() == Looper.getMainLooper()) cleanup.run()
+        else mainHandler.post(cleanup)
+        try {
+            cleanup.get(5, TimeUnit.SECONDS)
+        } catch (error: Exception) {
+            cleanup.cancel(false)
+            if (error is InterruptedException) Thread.currentThread().interrupt()
+            retiring = false
+            logError("FAIL clearing prompt listeners before hot reload", error)
+            return false
+        }
+        logInfo("Hot reloading FaceBiometricFix hooks ...")
         return true
     }
 
     override fun onHotReloaded(param: XposedModuleInterface.HotReloadedParam) {
+        if (!param.isSystemServer) {
+            systemUiProcess = true
+            reloadSystemUi(param)
+            return
+        }
         var replacedPreAuth = false
         var replacedStrength = false
         var targetClassLoader: ClassLoader? = null
@@ -114,6 +151,73 @@ class MainHook : XposedModule() {
     private fun installHooks(classLoader: ClassLoader) {
         hookAppPreAuthContext(classLoader)
         hookAppFaceStrengthCheck(classLoader)
+    }
+
+    private fun hookSystemUi(classLoader: ClassLoader) {
+        runCatching {
+            val controller = Class.forName(
+                "com.android.systemui.biometrics.AuthController", false, classLoader
+            )
+            val method = controller.getDeclaredMethod(
+                "onBiometricAuthenticated", Int::class.javaPrimitiveType
+            )
+            hook(method)
+                .setId(HOOK_ID_PROMPT_ICON)
+                .intercept(promptIconHooker(controller))
+            logInfo("OK: prompt-local face confirmation icon fix")
+        }.onFailure { logError("FAIL SystemUI prompt icon hook", it) }
+    }
+
+    private fun promptIconHooker(controller: Class<*>): XposedInterface.Hooker {
+        // Resolve the known dialog field once, without inspecting unrelated fields.
+        val dialogField = (generateSequence(controller) { it.superclass }
+            .mapNotNull { type ->
+                runCatching { type.getDeclaredField("mCurrentDialog") }.getOrNull()
+            }.firstOrNull() ?: error("AuthController#mCurrentDialog not found"))
+            .apply { isAccessible = true }
+        return XposedInterface.Hooker { chain ->
+            val result = chain.proceed()
+            // AuthController dispatches BiometricPrompt callbacks on the main thread.
+            // It does not handle keyguard authentication.
+            if (!retiring && chain.getArg(0) == FACE_MODALITY &&
+                Looper.myLooper() == Looper.getMainLooper()
+            ) {
+                runCatching {
+                    val root = dialogField.get(chain.thisObject) as? View
+                    if (root != null && promptGuards.none { it.root === root }) {
+                        PromptIconGuard.attach(
+                            root,
+                            onDisposed = { promptGuards.remove(it) },
+                            onError = { logError("FAIL updating prompt icons", it) }
+                        )?.let { promptGuards.add(it) }
+                    }
+                }.onFailure { logError("FAIL attaching prompt icon guard", it) }
+            }
+            result
+        }
+    }
+
+    private fun reloadSystemUi(param: XposedModuleInterface.HotReloadedParam) {
+        var replaced = false
+        var classLoader: ClassLoader? = null
+        for (handle in param.oldHookHandles) {
+            if (handle.id == HOOK_ID_PROMPT_ICON && !replaced) {
+                classLoader = handle.executable.declaringClass.classLoader
+                runCatching {
+                    handle.replaceHook(promptIconHooker(handle.executable.declaringClass))
+                    replaced = true
+                }.onFailure {
+                    logError("FAIL hot-replacing prompt icon hook", it)
+                    runCatching { handle.unhook() }
+                }
+            } else {
+                runCatching { handle.unhook() }
+                    .onFailure { logError("FAIL unhook old handle ${handle.id}", it) }
+            }
+        }
+        if (!replaced) {
+            (classLoader ?: Thread.currentThread().contextClassLoader)?.let { hookSystemUi(it) }
+        }
     }
 
     /**
@@ -176,6 +280,7 @@ class MainHook : XposedModule() {
 
         private const val HOOK_ID_PRE_AUTH_CONTEXT = "hook_pre_auth_context"
         private const val HOOK_ID_FACE_STRENGTH_CHECK = "hook_face_strength_check"
+        private const val HOOK_ID_PROMPT_ICON = "hook_prompt_icon"
 
         /** 厂商私有强度掩码（人脸传感器上报值） */
         private const val OEM_STRENGTH_MASK = 4095
