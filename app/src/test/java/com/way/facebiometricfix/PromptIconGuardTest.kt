@@ -13,6 +13,7 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.util.ReflectionHelpers
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -68,6 +69,23 @@ class PromptIconGuardTest {
         icon.layout(0, 0, 100, 100)
         draw()
         assertEquals(View.VISIBLE, icon.visibility)
+        assertEquals(View.INVISIBLE, overlay.visibility)
+    }
+
+    @Test fun detectsOverlapWhenThePromptWindowIsOffsetOnScreen() {
+        val attachInfo = ReflectionHelpers.getField<Any>(root, "mAttachInfo")
+        ReflectionHelpers.setField(attachInfo, "mWindowLeft", 40)
+        ReflectionHelpers.setField(attachInfo, "mWindowTop", 500)
+        val screenLocation = IntArray(2)
+        val windowLocation = IntArray(2)
+        icon.getLocationOnScreen(screenLocation)
+        icon.getLocationInWindow(windowLocation)
+        assertEquals(40, screenLocation[0] - windowLocation[0])
+        assertEquals(500, screenLocation[1] - windowLocation[1])
+
+        draw()
+
+        assertEquals(View.INVISIBLE, icon.visibility)
         assertEquals(View.INVISIBLE, overlay.visibility)
     }
 
