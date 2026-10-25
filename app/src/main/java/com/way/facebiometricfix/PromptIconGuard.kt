@@ -43,9 +43,10 @@ internal class PromptIconGuard(
                 confirm.getGlobalVisibleRect(confirmBounds)
             for (icon in icons) {
                 val view = icon.view
-                // getGlobalVisibleRect() is empty after our INVISIBLE change. Use
-                // layout bounds so a later frame does not undo the fix prematurely.
-                view.getLocationOnScreen(location)
+                // getGlobalVisibleRect() uses window-root coordinates and is empty
+                // for INVISIBLE icons. Keep both rectangles in that coordinate space
+                // using layout bounds, including when the window is offset on screen.
+                view.getLocationInWindow(location)
                 iconBounds.set(location[0], location[1],
                     location[0] + view.width, location[1] + view.height)
                 if (canConfirm && Rect.intersects(confirmBounds, iconBounds)) {
