@@ -72,9 +72,9 @@ Robolectric 回归测试覆盖图标重叠、保留布局、确认按钮不可�
 
 ## CI 自动构建与发布
 
-项目通过 [GitHub Actions](.github/workflows/build-release.yml) 在推送时自动构建：
+项目通过 [GitHub Actions](.github/workflows/build-release.yml) 发布到当前仓库：
 
-- **推送到 `main` 分支**：自动构建 Release APK（以 debug 密钥签名），并作为构建产物（Artifact）上传，可在 Actions 页面下载。
-- **推送 `v*` 标签**（如 `v1.0.0`）：自动构建、签名，并创建 GitHub Release 附上 APK。
-
-使用方法：在仓库页面点击 *Create a new release*，输入类似 `v1.0.0` 的标签，即可触发自动构建并生成 Release。
+- 推送到 `master` 且版本号变化时，运行回归测试和 Android Lint，构建正式签名的 Release APK，并创建 `v{versionName}` Release，附上 APK 与 SHA-256 校验文件。
+- 可手动运行该 workflow 发布当前版本；已存在的 Release 不会被覆盖。
+- 正式签名需要配置 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 和 `ANDROID_KEY_PASSWORD` 四个 Actions Secrets。
+- [Check workflow](.github/workflows/check.yml) 为 PR 提供测试、Lint 和 Debug APK。
